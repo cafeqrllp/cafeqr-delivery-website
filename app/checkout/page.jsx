@@ -1,104 +1,75 @@
 'use client';
 import { useState, useEffect, Suspense } from 'react';
 import { useSearchParams, useRouter } from 'next/navigation';
-import { FiArrowLeft, FiMapPin, FiUser, FiPhone, FiCreditCard, FiCheck, FiMail, FiLoader } from 'react-icons/fi';
+import { FiArrowLeft, FiMapPin, FiUser, FiPhone, FiCreditCard, FiCheck, FiMail } from 'react-icons/fi';
+
+// ── CHANGES FROM PREVIOUS VERSION ────────────────────────────────────────────
+// 1. OTP flow removed from Step 1 entirely (auth now handled at app/page.jsx).
+// 2. On mount, GET /api/auth/session to pre-fill customer email from session.
+//    Email is shown as a read-only verified field — not editable here.
+// 3. validateStep1 no longer checks OTP — only name + phone.
+// 4. Payment step: COD only. UPI and Card options removed.
+// 5. All other logic (cart, address, placeOrder, step indicator) UNCHANGED.
+// ─────────────────────────────────────────────────────────────────────────────
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || 'https://cafe-qr-backend.onrender.com/api';
 
 function CheckoutPageInner() {
-  const searchParams  = useSearchParams();
-  const router        = useRouter();
-  const restaurantId  = searchParams.get('r');
-  const orderType     = searchParams.get('t') || 'DELIVERY';
+  const searchParams = useSearchParams();
+  const router       = useRouter();
+  const restaurantId = searchParams.get('r');
+  const orderType    = searchParams.get('t') || 'DELIVERY';
 
-  // Steps: 1=contact+OTP, 2=address, 3=payment+confirm
-  const [step, setStep]       = useState(1);
-  const [cart, setCart]       = useState([]);
+  // Steps: 1=contact, 2=address, 3=payment+confirm
+  const [step, setStep]             = useState(1);
+  const [cart, setCart]             = useState([]);
   const [restaurant, setRestaurant] = useState(null);
 
   // Step 1 — contact
-  const [email, setEmail]         = useState('');
-  const [otpSent, setOtpSent]     = useState(false);
-  const [otp, setOtp]             = useState('');
-  const [otpVerified, setOtpVerified] = useState(false);
-  const [otpLoading, setOtpLoading]   = useState(false);
-  const [otpError, setOtpError]       = useState('');
-  const [name, setName]               = useState('');
-  const [phone, setPhone]             = useState('');
+  const [name,  setName]  = useState('');
+  const [phone, setPhone] = useState('');
+  const [email, setEmail] = useState('');        // pre-filled from session, read-only
+  const [sessionLoading, setSessionLoading] = useState(true);
 
   // Step 2 — address
   const [address, setAddress] = useState({ line1: '', area: '', city: 'Thrissur', pincode: '' });
 
-  // Step 3 — payment
+  // Step 3 — payment (COD only)
   const [payment, setPayment] = useState('COD');
   const [placing, setPlacing] = useState(false);
-  const [errors, setErrors]   = useState({});
+  const [errors,  setErrors]  = useState({});
 
-  // Load cart from sessionStorage
+  // ── Load cart + restaurant from sessionStorage ──────────────────────────────
   useEffect(() => {
     try {
       const saved = sessionStorage.getItem(`cart_${restaurantId}`);
       if (saved) setCart(JSON.parse(saved));
     } catch {}
-    // Try to load restaurant name for display
     try {
       const r = sessionStorage.getItem(`restaurant_${restaurantId}`);
       if (r) setRestaurant(JSON.parse(r));
     } catch {}
   }, [restaurantId]);
 
-  const cartTotal    = cart.reduce((s, i) => s + i.price * i.qty, 0);
-  const cartCount    = cart.reduce((s, i) => s + i.qty, 0);
-  const deliveryFee  = orderType === 'TAKEAWAY' ? 0 : (cartTotal >= 500 ? 0 : 40);
-  const grandTotal   = cartTotal + deliveryFee;
+  // ── Pre-fill email from delivery_session cookie (via /api/auth/session) ─────
+  useEffect(() => {
+    fetch('/api/auth/session')
+      .then(res => res.ok ? res.json() : null)
+      .then(data => { if (data?.email) setEmail(data.email); })
+      .catch(() => {})
+      .finally(() => setSessionLoading(false));
+  }, []);
 
-  // ── OTP via Gmail API (server route) ────────────────────────────
-  const sendOtp = async () => {
-    if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
-      setOtpError('Enter a valid email address');
-      return;
-    }
-    setOtpLoading(true);
-    setOtpError('');
-    try {
-      const res = await fetch('/api/auth/send-otp', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email }),
-      });
-      if (!res.ok) throw new Error('Failed to send OTP');
-      setOtpSent(true);
-    } catch (e) {
-      setOtpError(e.message || 'Could not send OTP. Please try again.');
-    } finally {
-      setOtpLoading(false);
-    }
-  };
+  const cartTotal   = cart.reduce((s, i) => s + i.price * i.qty, 0);
+  const cartCount   = cart.reduce((s, i) => s + i.qty, 0);
+  const deliveryFee = orderType === 'TAKEAWAY' ? 0 : (cartTotal >= 500 ? 0 : 40);
+  const grandTotal  = cartTotal + deliveryFee;
 
-  const verifyOtp = async () => {
-    if (!otp || otp.length < 4) { setOtpError('Enter the 6-digit OTP'); return; }
-    setOtpLoading(true);
-    setOtpError('');
-    try {
-      const res = await fetch('/api/auth/verify-otp', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email, otp }),
-      });
-      if (!res.ok) { setOtpError('Incorrect OTP. Please try again.'); return; }
-      setOtpVerified(true);
-    } catch {
-      setOtpError('Verification failed. Please try again.');
-    } finally {
-      setOtpLoading(false);
-    }
-  };
-
+  // ── Validation ──────────────────────────────────────────────────────────────
   const validateStep1 = () => {
     const e = {};
-    if (!name.trim())  e.name  = 'Name is required';
+    if (!name.trim()) e.name = 'Name is required';
     if (!phone.trim() || !/^[6-9]\d{9}$/.test(phone)) e.phone = 'Enter a valid 10-digit mobile number';
-    if (!otpVerified) e.otp = 'Please verify your email';
     setErrors(e);
     return Object.keys(e).length === 0;
   };
@@ -113,6 +84,7 @@ function CheckoutPageInner() {
     return Object.keys(e).length === 0;
   };
 
+  // ── Place order ─────────────────────────────────────────────────────────────
   const placeOrder = async () => {
     setPlacing(true);
     try {
@@ -141,13 +113,10 @@ function CheckoutPageInner() {
           throw new Error('Backend error');
         }
       } catch {
-        // Fallback: generate client-side order ID
         orderId = 'ORD-' + Math.random().toString(36).slice(2, 8).toUpperCase();
       }
 
-      // Clear cart
       try { sessionStorage.removeItem(`cart_${restaurantId}`); } catch {}
-
       router.push(`/track?id=${orderId}&r=${restaurantId}`);
     } finally {
       setPlacing(false);
@@ -172,14 +141,19 @@ function CheckoutPageInner() {
 
   return (
     <div className="min-h-screen bg-stone-50">
+
       {/* Header */}
       <div className="bg-white sticky top-0 z-10 border-b border-stone-100">
         <div className="flex items-center gap-3 px-4 py-4">
-          <button onClick={() => step === 1 ? router.back() : setStep(s => s - 1)} className="p-1.5 -ml-1 rounded-lg hover:bg-stone-100 text-stone-500">
+          <button
+            onClick={() => step === 1 ? router.back() : setStep(s => s - 1)}
+            className="p-1.5 -ml-1 rounded-lg hover:bg-stone-100 text-stone-500"
+          >
             <FiArrowLeft size={20} />
           </button>
           <h1 className="font-bold text-stone-900 text-lg">Checkout</h1>
         </div>
+
         {/* Step indicator */}
         <div className="flex px-4 pb-3 gap-0">
           {STEPS.map((s, idx) => (
@@ -208,10 +182,12 @@ function CheckoutPageInner() {
 
       <div className="px-4 py-5 space-y-4 pb-36">
 
-        {/* Cart summary (always visible at top) */}
+        {/* Cart summary (always visible) */}
         <div className="bg-white rounded-2xl p-4">
           <div className="flex items-center justify-between mb-2">
-            <span className="text-xs font-semibold text-stone-500 uppercase tracking-wide">{cartCount} item{cartCount !== 1 ? 's' : ''}</span>
+            <span className="text-xs font-semibold text-stone-500 uppercase tracking-wide">
+              {cartCount} item{cartCount !== 1 ? 's' : ''}
+            </span>
             <button onClick={() => router.back()} className="text-xs text-brand-orange font-medium">Edit</button>
           </div>
           {cart.map(i => (
@@ -238,7 +214,7 @@ function CheckoutPageInner() {
           </div>
         </div>
 
-        {/* ── Step 1: Contact + Email OTP ─────────────────────────── */}
+        {/* ── Step 1: Contact details ──────────────────────────────── */}
         {step === 1 && (
           <div className="bg-white rounded-2xl p-5 space-y-4">
             <div className="flex items-center gap-2">
@@ -279,57 +255,28 @@ function CheckoutPageInner() {
               {errors.phone && <p className="text-xs text-red-500 mt-1">{errors.phone}</p>}
             </div>
 
-            {/* Email OTP */}
+            {/* Email — read-only, pre-filled from session */}
             <div>
-              <label className="text-xs font-medium text-stone-500 uppercase tracking-wide">Email (for order confirmation)</label>
-              <div className="flex gap-2 mt-1.5">
-                <input
-                  className={`flex-1 border rounded-xl px-4 py-3 text-sm outline-none transition-colors ${
-                    otpVerified ? 'border-green-400 bg-green-50' : 'border-stone-200 focus:border-brand-orange'
-                  }`}
-                  placeholder="you@example.com"
-                  value={email}
-                  type="email"
-                  onChange={e => { setEmail(e.target.value); setOtpSent(false); setOtpVerified(false); setOtpError(''); }}
-                  disabled={otpVerified}
-                />
-                {!otpVerified && (
-                  <button
-                    onClick={sendOtp}
-                    disabled={otpLoading || otpSent}
-                    className="flex-shrink-0 bg-brand-orange text-white px-4 py-3 rounded-xl text-xs font-semibold disabled:opacity-60 transition-opacity"
-                  >
-                    {otpLoading ? '…' : otpSent ? 'Sent ✓' : 'Send OTP'}
-                  </button>
+              <label className="text-xs font-medium text-stone-500 uppercase tracking-wide">Email</label>
+              <div className="relative mt-1.5">
+                <FiMail className="absolute left-3 top-1/2 -translate-y-1/2 text-stone-400" size={15} />
+                {sessionLoading ? (
+                  <div className="w-full border border-stone-200 rounded-xl px-4 py-3 pl-9 bg-stone-50 text-sm text-stone-300 animate-pulse">Loading…</div>
+                ) : (
+                  <input
+                    className="w-full border border-green-300 bg-green-50 rounded-xl pl-9 pr-10 py-3 text-sm text-stone-600 outline-none cursor-default"
+                    value={email}
+                    readOnly
+                    tabIndex={-1}
+                  />
                 )}
-                {otpVerified && (
-                  <div className="flex-shrink-0 bg-green-500 text-white px-4 py-3 rounded-xl text-xs font-semibold flex items-center gap-1">
-                    <FiCheck size={13} /> Verified
+                {!sessionLoading && (
+                  <div className="absolute right-3 top-1/2 -translate-y-1/2 w-5 h-5 rounded-full bg-green-500 flex items-center justify-center">
+                    <FiCheck size={11} className="text-white" />
                   </div>
                 )}
               </div>
-              {otpSent && !otpVerified && (
-                <div className="mt-2 flex gap-2">
-                  <input
-                    className="flex-1 border border-stone-200 rounded-xl px-4 py-2.5 text-sm outline-none focus:border-brand-orange tracking-[0.3em] font-mono"
-                    placeholder="Enter 6-digit OTP"
-                    value={otp}
-                    onChange={e => { setOtp(e.target.value.replace(/\D/g, '').slice(0, 6)); setOtpError(''); }}
-                    maxLength={6}
-                    inputMode="numeric"
-                    autoFocus
-                  />
-                  <button
-                    onClick={verifyOtp}
-                    disabled={otpLoading || otp.length < 6}
-                    className="flex-shrink-0 bg-stone-900 text-white px-4 py-2.5 rounded-xl text-xs font-semibold disabled:opacity-50"
-                  >
-                    {otpLoading ? '…' : 'Verify'}
-                  </button>
-                </div>
-              )}
-              {otpError && <p className="text-xs text-red-500 mt-1">{otpError}</p>}
-              {errors.otp && !otpVerified && <p className="text-xs text-red-500 mt-1">{errors.otp}</p>}
+              <p className="text-xs text-stone-400 mt-1">Verified via OTP at sign-in</p>
             </div>
           </div>
         )}
@@ -404,41 +351,30 @@ function CheckoutPageInner() {
           </div>
         )}
 
-        {/* ── Step 3: Payment ─────────────────────────────────────── */}
+        {/* ── Step 3: Payment (COD only) ───────────────────────────── */}
         {step === 3 && (
           <div className="bg-white rounded-2xl p-5">
             <div className="flex items-center gap-2 mb-4">
               <FiCreditCard size={18} className="text-brand-orange" />
               <h2 className="font-semibold text-stone-800">Payment Method</h2>
             </div>
-            <div className="space-y-2">
-              {[
-                { val: 'COD',  label: 'Cash on Delivery', desc: 'Pay when order arrives', icon: '💵' },
-                { val: 'UPI',  label: 'UPI',              desc: 'PhonePe, GPay, Paytm',  icon: '📱' },
-                { val: 'CARD', label: 'Card',             desc: 'Visa, Mastercard, RuPay', icon: '💳' },
-              ].map(opt => (
-                <button
-                  key={opt.val}
-                  onClick={() => setPayment(opt.val)}
-                  className={`w-full flex items-center gap-4 p-4 rounded-xl border-2 transition-all ${
-                    payment === opt.val ? 'border-brand-orange bg-orange-50' : 'border-stone-100 hover:border-stone-200'
-                  }`}
-                >
-                  <span className="text-2xl">{opt.icon}</span>
-                  <div className="text-left">
-                    <p className={`text-sm font-semibold ${payment === opt.val ? 'text-orange-700' : 'text-stone-800'}`}>{opt.label}</p>
-                    <p className="text-xs text-stone-400">{opt.desc}</p>
-                  </div>
-                  <div className={`ml-auto w-5 h-5 rounded-full border-2 flex items-center justify-center ${
-                    payment === opt.val ? 'border-brand-orange bg-brand-orange' : 'border-stone-300'
-                  }`}>
-                    {payment === opt.val && <div className="w-2 h-2 bg-white rounded-full" />}
-                  </div>
-                </button>
-              ))}
-            </div>
+            {/* COD — only option for now */}
+            <button
+              className="w-full flex items-center gap-4 p-4 rounded-xl border-2 border-brand-orange bg-orange-50 cursor-default"
+            >
+              <span className="text-2xl">💵</span>
+              <div className="text-left">
+                <p className="text-sm font-semibold text-orange-700">Cash on Delivery</p>
+                <p className="text-xs text-stone-400">Pay when your order arrives</p>
+              </div>
+              <div className="ml-auto w-5 h-5 rounded-full border-2 border-brand-orange bg-brand-orange flex items-center justify-center">
+                <div className="w-2 h-2 bg-white rounded-full" />
+              </div>
+            </button>
+            <p className="text-xs text-stone-300 text-center mt-3">Online payment coming soon</p>
           </div>
         )}
+
       </div>
 
       {/* Bottom CTA */}
