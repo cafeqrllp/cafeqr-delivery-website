@@ -1,4 +1,5 @@
 'use client';
+import Image from 'next/image';
 import { FiPlus, FiMinus } from 'react-icons/fi';
 
 export default function MenuItemCard({ item, qty, onAdd, onRemove }) {
@@ -7,12 +8,16 @@ export default function MenuItemCard({ item, qty, onAdd, onRemove }) {
     <div className="flex gap-3 py-4 border-b border-stone-100 last:border-0 animate-fade-in">
       {/* Image */}
       {item.image_url ? (
-        <img
-          src={item.image_url}
-          alt={item.name}
-          className="w-24 h-24 rounded-xl object-cover flex-shrink-0"
-          loading="lazy"
-        />
+        <div className="w-24 h-24 rounded-xl overflow-hidden flex-shrink-0 relative">
+          <Image
+            src={item.image_url}
+            alt={item.name}
+            fill
+            sizes="96px"
+            className="object-cover"
+            loading="lazy"
+          />
+        </div>
       ) : (
         <div className="w-24 h-24 rounded-xl bg-stone-100 flex items-center justify-center flex-shrink-0">
           <span className="text-3xl">{veg ? '🥬' : '🍗'}</span>

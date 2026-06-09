@@ -293,7 +293,7 @@ function CheckoutPageInner() {
             {orderType === 'TAKEAWAY' ? (
               <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 space-y-2">
                 <p className="text-sm font-semibold text-amber-800">🛖 Takeaway Order</p>
-                <p className="text-xs text-amber-600">Your order will be ready for pickup. We'll send a confirmation to {email}.</p>
+                <p className="text-xs text-amber-600">Your order will be ready for pickup. We&apos;ll send a confirmation to {email}.</p>
                 <div className="border-t border-amber-200 pt-2 mt-2">
                   <p className="text-xs text-amber-700 font-medium">{name}</p>
                   <p className="text-xs text-amber-700">+91 {phone}</p>
