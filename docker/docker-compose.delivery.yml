@@ -1,0 +1,84 @@
+# docker-compose.delivery.yml
+# Flyway migration service for CafeQR Delivery tables.
+#
+# Add this to your existing docker-compose.yml, or run separately:
+#   docker compose -f docker-compose.yml -f docker/docker-compose.delivery.yml up
+#
+# Prerequisites:
+#   - postgres service must be running and healthy
+#   - POSTGRES_DB, POSTGRES_USER, POSTGRES_PASSWORD must be set in .env
+#   - db/migrations/ folder must exist with V1__*.sql through V7__*.sql
+
+services:
+
+  # -------------------------------------------------------------------
+  # Flyway: runs delivery migrations once, then exits (restart: no)
+  # -------------------------------------------------------------------
+  flyway-delivery:
+    image: flyway/flyway:10-alpine
+    container_name: cafeqr_flyway_delivery
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      - FLYWAY_URL=jdbc:postgresql://postgres:5432/${POSTGRES_DB}
+      - FLYWAY_USER=${POSTGRES_USER}
+      - FLYWAY_PASSWORD=${POSTGRES_PASSWORD}
+      - FLYWAY_SCHEMAS=public
+      - FLYWAY_LOCATIONS=filesystem:/flyway/sql
+      - FLYWAY_BASELINE_ON_MIGRATE=true
+      - FLYWAY_BASELINE_VERSION=0
+      # Fail fast on checksum mismatch (never silently skip)
+      - FLYWAY_VALIDATE_ON_MIGRATE=true
+      # Out-of-order not allowed (enforce strict V1 < V2 < V3 ordering)
+      - FLYWAY_OUT_OF_ORDER=false
+    volumes:
+      # Mount the db/migrations/ folder (relative to project root)
+      - ../db/migrations:/flyway/sql:ro
+    command: migrate
+    networks:
+      - cafeqr_network
+    restart: no   # Run once on startup, do not restart
+
+  # -------------------------------------------------------------------
+  # Redis: session cache, order status cache
+  # (add to existing stack if not already present)
+  # -------------------------------------------------------------------
+  # redis:
+  #   image: redis:7-alpine
+  #   container_name: cafeqr_redis
+  #   ports:
+  #     - "6379:6379"
+  #   volumes:
+  #     - redis_data:/data
+  #   command: redis-server --appendonly yes
+  #   networks:
+  #     - cafeqr_network
+  #   restart: unless-stopped
+
+  # -------------------------------------------------------------------
+  # RabbitMQ: async notification queue
+  # (add to existing stack if not already present)
+  # -------------------------------------------------------------------
+  # rabbitmq:
+  #   image: rabbitmq:3.13-management-alpine
+  #   container_name: cafeqr_rabbitmq
+  #   ports:
+  #     - "5672:5672"    # AMQP
+  #     - "15672:15672"  # Management UI (http://localhost:15672)
+  #   environment:
+  #     - RABBITMQ_DEFAULT_USER=${RABBITMQ_USER}
+  #     - RABBITMQ_DEFAULT_PASS=${RABBITMQ_PASSWORD}
+  #   volumes:
+  #     - rabbitmq_data:/var/lib/rabbitmq
+  #   networks:
+  #     - cafeqr_network
+  #   restart: unless-stopped
+
+networks:
+  cafeqr_network:
+    external: true   # Must match the network name in your main docker-compose.yml
+
+# volumes:
+#   redis_data:
+#   rabbitmq_data:
