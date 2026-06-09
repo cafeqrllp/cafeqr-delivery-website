@@ -15,13 +15,13 @@
 //   - /api/**           (API routes handle their own auth via getDeliverySession)
 //   - /_next/**         (Next.js internals)
 //   - /public/**        (static assets)
-//   - cafeTestQRFrontend (separate repo — completely unrelated)
 
-import { NextResponse } from 'next/server';
+import { NextResponse }        from 'next/server';
 import { getSessionFromCookies } from '@/lib/auth';
 
-export function middleware(req) {
-  const session = getSessionFromCookies(req.cookies);
+// getSessionFromCookies is now async (uses Web Crypto API)
+export async function middleware(req) {
+  const session = await getSessionFromCookies(req.cookies);
 
   if (!session) {
     // Build redirect URL: preserve ?r= and ?t= so the login page knows
