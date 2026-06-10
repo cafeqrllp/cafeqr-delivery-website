@@ -1,29 +1,23 @@
-// app/api/auth/verify-otp/route.js
-// Verifies the 6-digit OTP submitted by the customer.
-// On success: clears OTP from store, sets a signed HttpOnly delivery_session cookie.
+// app/api/auth/verify-otp/route.js  (App Router)
+// Thin proxy → POST /api/v1/auth/customer/verify-otp on the Spring Boot backend.
 //
-// CHANGES FROM PREVIOUS VERSION:
-//   - All OTP check logic is UNCHANGED.
-//   - Added: after successful verify, issue a signed delivery_session cookie
-//     using Node built-in `crypto` (HMAC-SHA256 + INTERNAL_API_SECRET).
-//     No new npm dependency added.
+// The backend verifies the OTP against Redis and returns { verified, email }.
+// On success, this route issues a signed HttpOnly delivery_session cookie
+// (HMAC-SHA256 via INTERNAL_API_SECRET) so the browser stays authenticated.
 //
-// NOTE: Delivery Website customer auth ONLY.
-//       Does NOT affect staff/POS auth in cafeTestQRFrontend.
+// Request  body: { email, otp, name?, phone? }
+// Response 200:  { verified: true, email, name, phone }  + Set-Cookie
+// Response 4xx:  { error: string }
 
 import { NextResponse } from 'next/server';
-import { createHmac } from 'crypto';
-import { otpStore } from '../send-otp/store';
+import { createHmac }   from 'crypto';
 
 const SESSION_TTL_DAYS = 7;
 const SESSION_COOKIE   = 'delivery_session';
 
-/**
- * Build a self-contained signed token: base64url(payload).signature
- * Signature = HMAC-SHA256( base64url(payload), INTERNAL_API_SECRET )
- */
-function buildSessionToken(email) {
-  const payload = Buffer.from(JSON.stringify({ email, iat: Date.now() }))
+function buildSessionToken({ email, name = '', phone = '' }) {
+  const payload = Buffer
+    .from(JSON.stringify({ email, name, phone, iat: Date.now() }))
     .toString('base64')
     .replace(/=/g, '');
 
@@ -35,54 +29,68 @@ function buildSessionToken(email) {
 
 export async function POST(req) {
   try {
-    const { email, otp } = await req.json();
+    const body = await req.json().catch(() => ({}));
+    const { email, otp, name = '', phone = '' } = body;
 
     if (!email || !otp) {
-      return NextResponse.json({ error: 'Email and OTP required' }, { status: 400 });
-    }
-
-    const record = otpStore.get(email);
-
-    if (!record) {
       return NextResponse.json(
-        { error: 'No OTP found. Please request a new one.' },
-        { status: 404 }
+        { error: 'Email and OTP are required' },
+        { status: 400 }
       );
     }
 
-    if (Date.now() > record.expiresAt) {
-      otpStore.delete(email);
-      return NextResponse.json(
-        { error: 'OTP has expired. Please request a new one.' },
-        { status: 410 }
-      );
+    const backendUrl =
+      process.env.NEXT_PUBLIC_API_BASE_URL ||
+      'https://cafe-qr-backend.onrender.com/api';
+
+    const upstream = await fetch(`${backendUrl}/v1/auth/customer/verify-otp`, {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ email, otp }),
+    });
+
+    const data = await upstream.json().catch(() => ({}));
+
+    if (!upstream.ok) {
+      const message =
+        data?.message ||
+        data?.error   ||
+        `Verification failed (${upstream.status})`;
+      return NextResponse.json({ error: message }, { status: upstream.status });
     }
 
-    if (record.otp !== String(otp)) {
-      return NextResponse.json({ error: 'Incorrect OTP.' }, { status: 401 });
-    }
+    // ── OTP verified — issue session cookie ──────────────────────────────────
+    const resolvedName  = data?.data?.name  || name  || '';
+    const resolvedPhone = data?.data?.phone || phone || '';
+    const resolvedEmail = data?.data?.email || email;
 
-    // ── Success ─────────────────────────────────────────────────────────────
-    // 1. Invalidate OTP immediately (one-time use)
-    otpStore.delete(email);
+    const token = buildSessionToken({
+      email: resolvedEmail,
+      name:  resolvedName,
+      phone: resolvedPhone,
+    });
 
-    // 2. Build signed session token
-    const token = buildSessionToken(email);
+    const response = NextResponse.json({
+      verified: true,
+      email:    resolvedEmail,
+      name:     resolvedName,
+      phone:    resolvedPhone,
+    });
 
-    // 3. Set HttpOnly cookie on the response
-    const maxAge = SESSION_TTL_DAYS * 24 * 60 * 60; // seconds
-    const response = NextResponse.json({ verified: true });
     response.cookies.set(SESSION_COOKIE, token, {
-      httpOnly  : true,
-      secure    : process.env.APP_ENV !== 'development',
-      sameSite  : 'lax',
-      path      : '/',
-      maxAge,
+      httpOnly: true,
+      secure:   process.env.APP_ENV !== 'development',
+      sameSite: 'lax',
+      path:     '/',
+      maxAge:   SESSION_TTL_DAYS * 24 * 60 * 60,
     });
 
     return response;
   } catch (err) {
-    console.error('[verify-otp]', err);
-    return NextResponse.json({ error: 'Verification failed' }, { status: 500 });
+    console.error('[verify-otp proxy]', err.message);
+    return NextResponse.json(
+      { error: 'Could not reach authentication server. Please try again.' },
+      { status: 502 }
+    );
   }
 }
