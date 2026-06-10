@@ -1,3 +1,3 @@
-// Shared OTP store — exported so verify-otp can reference the same Map.
-// Replace with Redis for multi-instance production deployments.
-export const otpStore = new Map();
+// INTENTIONALLY EMPTY — this file is kept as a placeholder to avoid import errors.
+// The OTP store has been moved to the Spring Boot backend (Redis).
+// No code in this project imports this file.
