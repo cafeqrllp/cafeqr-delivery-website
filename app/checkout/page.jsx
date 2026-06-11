@@ -183,10 +183,57 @@ function CheckoutPageInner() {
       .finally(() => setSessionLoading(false));
   }, []);
 
-  const cartTotal   = cart.reduce((s, i) => s + i.price * i.qty, 0);
+  // --- GST and Totals Calculations ---
+  const gstEnabled = restaurant?.taxEnabled || false;
+  const pricesIncludeTax = gstEnabled ? !!restaurant?.pricesIncludeTax : false;
+  const defaultTaxRate = (() => {
+    if (!gstEnabled) return 0;
+    const rates = restaurant?.taxRates || [];
+    const def = rates.find(r => r.id === restaurant?.taxDefaultId);
+    return def ? parseFloat(def.value || def.rate || 0) || 0 : (rates[0] ? parseFloat(rates[0].value || rates[0].rate || 0) || 0 : 0);
+  })();
+
+  let totalTaxableAmount = 0;
+  let totalTaxAmount = 0;
+  let subtotal = 0;
+
+  cart.forEach(i => {
+    const qty = Number(i.qty || 1);
+    const faceUnit = Number(i.price || 0);
+    const isPackaged = !!i.isPackagedGood;
+    const rate = gstEnabled 
+      ? (isPackaged 
+          ? (i.taxRate !== undefined && i.taxRate !== null && i.taxRate !== '' ? Number(i.taxRate) : defaultTaxRate) 
+          : defaultTaxRate) 
+      : 0;
+
+    const isInclusive = gstEnabled && (isPackaged || pricesIncludeTax);
+    
+    let baseUnit;
+    let lineTotal;
+    let taxable;
+    let tax;
+
+    if (isInclusive && rate > 0) {
+      baseUnit = faceUnit / (1 + rate / 100);
+      lineTotal = faceUnit * qty;
+      taxable = lineTotal / (1 + rate / 100);
+      tax = lineTotal - taxable;
+    } else {
+      baseUnit = faceUnit;
+      taxable = faceUnit * qty;
+      tax = taxable * (rate / 100);
+      lineTotal = taxable + tax;
+    }
+
+    totalTaxableAmount += taxable;
+    totalTaxAmount += tax;
+    subtotal += lineTotal;
+  });
+
   const cartCount   = cart.reduce((s, i) => s + i.qty, 0);
-  const deliveryFee = orderType === 'TAKEAWAY' ? 0 : (cartTotal >= 500 ? 0 : 40);
-  const grandTotal  = cartTotal + deliveryFee;
+  const deliveryFee = orderType === 'TAKEAWAY' ? 0 : ((totalTaxableAmount + (pricesIncludeTax ? totalTaxAmount : 0)) >= 500 ? 0 : 40);
+  const grandTotal  = totalTaxableAmount + totalTaxAmount + deliveryFee;
 
   // ── Validation ──────────────────────────────────────────────────────────────
   const validateStep1 = () => {
@@ -321,8 +368,13 @@ function CheckoutPageInner() {
           ))}
           <div className="border-t border-stone-100 mt-2 pt-2 space-y-1">
             <div className="flex justify-between text-sm text-stone-500">
-              <span>Subtotal</span><span>₹{cartTotal.toFixed(0)}</span>
+              <span>Subtotal</span><span>₹{totalTaxableAmount.toFixed(2)}</span>
             </div>
+            {gstEnabled && totalTaxAmount > 0 && (
+              <div className="flex justify-between text-sm text-stone-500">
+                <span>{restaurant?.taxLabelGlobal || 'GST'}</span><span>₹{totalTaxAmount.toFixed(2)}</span>
+              </div>
+            )}
             {orderType === 'DELIVERY' && (
               <div className="flex justify-between text-sm text-stone-500">
                 <span>Delivery fee</span>
@@ -332,7 +384,7 @@ function CheckoutPageInner() {
               </div>
             )}
             <div className="flex justify-between text-base font-bold text-stone-900 pt-1">
-              <span>Total</span><span>₹{grandTotal.toFixed(0)}</span>
+              <span>Total</span><span>₹{grandTotal.toFixed(2)}</span>
             </div>
           </div>
         </div>
@@ -529,7 +581,7 @@ function CheckoutPageInner() {
           >
             {placing
               ? <><div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" /> Placing Order…</>
-              : `Place Order · ₹${grandTotal}`
+              : `Place Order · ₹${grandTotal.toFixed(2)}`
             }
           </button>
         )}

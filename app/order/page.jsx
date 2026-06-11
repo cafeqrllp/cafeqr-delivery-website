@@ -95,12 +95,25 @@ function OrderPageInner() {
           rating: rData.rating || 4.5,
           delivery_time: rData.estimatedDeliveryMinutes ? `${rData.estimatedDeliveryMinutes} min` : '40 min',
           min_order: rData.minOrderAmount || 0,
+          // Tax settings
+          taxEnabled: rData.taxEnabled || false,
+          taxLabelGlobal: rData.taxLabelGlobal || 'GST',
+          taxRates: rData.taxRates || [],
+          taxDefaultId: rData.taxDefaultId || null,
+          pricesIncludeTax: rData.pricesIncludeTax || false,
+          taxSplitEnabled: rData.taxSplitEnabled || true,
+          currencyDecimalPlaces: rData.currencyDecimalPlaces ?? 2,
         };
 
         const items  = Array.isArray(mData) ? mData : (mData.items || mData.products || []);
         const cats   = [...new Set(items.map(i => i.category || i.categoryName || 'Other'))];
 
         setRestaurant(formattedRestaurant);
+        try {
+          sessionStorage.setItem(`restaurant_${restaurantId}`, JSON.stringify(formattedRestaurant));
+        } catch (e) {
+          console.warn('Failed to save restaurant settings to sessionStorage', e);
+        }
         setMenu(items);
         setCategories(cats);
         setActiveCategory(cats[0] || null);
@@ -124,7 +137,14 @@ function OrderPageInner() {
   const addItem = (item) => setCart(prev => {
     const existing = prev.find(i => i.id === item.id);
     if (existing) return prev.map(i => i.id === item.id ? { ...i, qty: i.qty + 1 } : i);
-    return [...prev, { id: item.id, name: item.name, price: Number(item.price), qty: 1 }];
+    return [...prev, { 
+      id: item.id, 
+      name: item.name, 
+      price: Number(item.price), 
+      qty: 1,
+      taxRate: item.taxRate,
+      isPackagedGood: item.isPackagedGood
+    }];
   });
 
   const removeItem = (id) => setCart(prev => {
