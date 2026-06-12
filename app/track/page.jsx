@@ -22,8 +22,10 @@ const getStepperStatusIndex = (backendStatus) => {
   switch (String(backendStatus).toUpperCase()) {
     case 'DRAFT':
     case 'PLACED':
+    case 'PENDING':
       return 0;
     case 'CONFIRMED':
+    case 'KITCHEN':
     case 'IN_PROGRESS':
       return 1;
     case 'READY':
@@ -71,7 +73,7 @@ function TrackPageInner() {
     document.head.appendChild(script);
   }, []);
 
-  // Fetch order status
+  // Fetch order status & listen for real-time SSE updates
   useEffect(() => {
     if (!orderId) { router.replace('/'); return; }
 
@@ -98,9 +100,36 @@ function TrackPageInner() {
 
     fetchStatus();
 
-    // Poll every 15 seconds
+    // Poll every 15 seconds as fallback
     const interval = setInterval(fetchStatus, 15000);
-    return () => clearInterval(interval);
+
+    // Setup real-time EventSource connection
+    const apiBase = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8080/api';
+    const sseUrl = `${apiBase}/delivery/orders/${orderId}/sse`;
+    console.log('[sse] Connecting to order status updates:', sseUrl);
+
+    let eventSource;
+    try {
+      eventSource = new EventSource(sseUrl);
+      eventSource.addEventListener('status-update', (event) => {
+        const newStatus = event.data;
+        console.log('[sse] Real-time status update:', newStatus);
+        setStatus(newStatus);
+        fetchStatus();
+      });
+      eventSource.addEventListener('error', (err) => {
+        console.warn('[sse] Connection issue, EventSource will auto-reconnect:', err);
+      });
+    } catch (e) {
+      console.warn('[sse] Failed to init EventSource:', e);
+    }
+
+    return () => {
+      clearInterval(interval);
+      if (eventSource) {
+        eventSource.close();
+      }
+    };
   }, [orderId, restaurantId, router]);
 
   // Initialize Route Map
@@ -162,6 +191,7 @@ function TrackPageInner() {
   const steps     = orderType === 'TAKEAWAY' ? TAKEAWAY_STEPS : ORDER_STEPS;
   const stepIdx   = getStepperStatusIndex(status);
   const isDelivered = status === 'DELIVERED' || status === 'COMPLETED' || (orderType === 'TAKEAWAY' && status === 'READY');
+  const isCancelled = status === 'CANCELLED' || status === 'VOID';
 
   if (loading) return (
     <div className="min-h-screen flex items-center justify-center bg-stone-50">
@@ -181,7 +211,7 @@ function TrackPageInner() {
             <h1 className="font-bold text-stone-900 text-lg">Order Tracking</h1>
             <p className="text-xs text-stone-400 mt-0.5">#{orderId}</p>
           </div>
-          {!isDelivered && (
+          {!isDelivered && !isCancelled && (
             <div className="flex items-center gap-1.5 bg-orange-50 border border-orange-200 px-3 py-1.5 rounded-full">
               <div className="w-2 h-2 bg-brand-orange rounded-full animate-pulse" />
               <span className="text-xs font-semibold text-orange-700">{eta}</span>
@@ -199,52 +229,63 @@ function TrackPageInner() {
         </div>
       )}
 
-      {/* Progress stepper */}
-      <div className="bg-white mx-4 mt-4 rounded-2xl p-5">
-        <h2 className="text-sm font-semibold text-stone-600 mb-4">Order Status</h2>
-        <div className="space-y-0">
-          {steps.map((step, idx) => {
-            const done    = idx < stepIdx;
-            const current = idx === stepIdx;
-            const Icon    = step.icon;
-            return (
-              <div key={step.key} className="flex gap-4">
-                {/* Line + circle */}
-                <div className="flex flex-col items-center">
-                  <div className={`w-9 h-9 rounded-full flex items-center justify-center flex-shrink-0 border-2 transition-all ${
-                    done    ? 'bg-green-500 border-green-500 text-white' :
-                    current ? 'bg-brand-orange border-brand-orange text-white' :
-                              'bg-white border-stone-200 text-stone-300'
-                  }`}>
-                    <Icon size={16} />
-                  </div>
-                  {idx < steps.length - 1 && (
-                    <div className={`w-0.5 flex-1 min-h-[24px] ${
-                      done ? 'bg-green-400' : 'bg-stone-200'
-                    }`} />
-                  )}
-                </div>
-                {/* Label */}
-                <div className={`pb-5 ${ idx === steps.length - 1 ? 'pb-0' : '' }`}>
-                  <p className={`text-sm font-semibold ${
-                    current ? 'text-brand-orange' : done ? 'text-green-600' : 'text-stone-300'
-                  }`}>{step.label}</p>
-                  {current && (
-                    <p className="text-xs text-stone-400 mt-0.5 flex items-center gap-1">
-                      <span className="inline-block w-1.5 h-1.5 bg-brand-orange rounded-full animate-pulse" />
-                      {step.desc}
-                    </p>
-                  )}
-                  {done && <p className="text-xs text-stone-300 mt-0.5">{step.desc}</p>}
-                </div>
-              </div>
-            );
-          })}
+      {/* Cancelled banner */}
+      {isCancelled && (
+        <div className="bg-red-500 text-white px-4 py-5 text-center">
+          <p className="text-2xl mb-1">❌</p>
+          <p className="font-bold text-lg">Order Cancelled</p>
+          <p className="text-sm opacity-80 mt-0.5">This order has been cancelled or declined.</p>
         </div>
-      </div>
+      )}
+
+      {/* Progress stepper */}
+      {!isCancelled && (
+        <div className="bg-white mx-4 mt-4 rounded-2xl p-5">
+          <h2 className="text-sm font-semibold text-stone-600 mb-4">Order Status</h2>
+          <div className="space-y-0">
+            {steps.map((step, idx) => {
+              const done    = idx < stepIdx;
+              const current = idx === stepIdx;
+              const Icon    = step.icon;
+              return (
+                <div key={step.key} className="flex gap-4">
+                  {/* Line + circle */}
+                  <div className="flex flex-col items-center">
+                    <div className={`w-9 h-9 rounded-full flex items-center justify-center flex-shrink-0 border-2 transition-all ${
+                      done    ? 'bg-green-500 border-green-500 text-white' :
+                      current ? 'bg-brand-orange border-brand-orange text-white' :
+                                'bg-white border-stone-200 text-stone-300'
+                    }`}>
+                      <Icon size={16} />
+                    </div>
+                    {idx < steps.length - 1 && (
+                      <div className={`w-0.5 flex-1 min-h-[24px] ${
+                        done ? 'bg-green-400' : 'bg-stone-200'
+                      }`} />
+                    )}
+                  </div>
+                  {/* Label */}
+                  <div className={`pb-5 ${ idx === steps.length - 1 ? 'pb-0' : '' }`}>
+                    <p className={`text-sm font-semibold ${
+                      current ? 'text-brand-orange' : done ? 'text-green-600' : 'text-stone-300'
+                    }`}>{step.label}</p>
+                    {current && (
+                      <p className="text-xs text-stone-400 mt-0.5 flex items-center gap-1">
+                        <span className="inline-block w-1.5 h-1.5 bg-brand-orange rounded-full animate-pulse" />
+                        {step.desc}
+                      </p>
+                    )}
+                    {done && <p className="text-xs text-stone-300 mt-0.5">{step.desc}</p>}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
 
       {/* Visual Map Container */}
-      {orderType === 'DELIVERY' && mapLoaded && (
+      {orderType === 'DELIVERY' && mapLoaded && !isCancelled && (
         <div className="bg-white mx-4 mt-3 rounded-2xl p-5">
           <h2 className="text-sm font-semibold text-stone-600 mb-3">Delivery Route</h2>
           <div id="tracking-map" className="h-64 w-full rounded-xl border border-stone-200 overflow-hidden z-0" />
@@ -255,15 +296,21 @@ function TrackPageInner() {
       {order?.items && (
         <div className="bg-white mx-4 mt-3 rounded-2xl p-5">
           <h2 className="text-sm font-semibold text-stone-600 mb-3">Your Order</h2>
-          {order.items.map((item, i) => (
-            <div key={i} className="flex justify-between text-sm py-1">
-              <span className="text-stone-700">{item.name} × {item.qty}</span>
-              <span className="font-medium text-stone-800">₹{(item.price * item.qty).toFixed(0)}</span>
-            </div>
-          ))}
-          {order.total && (
+          {order.items.map((item, i) => {
+            const displayName = item.productName || item.name || 'Item';
+            const displayQty = item.quantity ?? item.qty ?? 1;
+            const displayPrice = item.unitPrice ?? item.price ?? 0;
+            const displayLineTotal = item.lineTotal ?? (displayPrice * displayQty);
+            return (
+              <div key={i} className="flex justify-between text-sm py-1">
+                <span className="text-stone-700">{displayName} × {displayQty}</span>
+                <span className="font-medium text-stone-800">₹{Number(displayLineTotal).toFixed(0)}</span>
+              </div>
+            );
+          })}
+          {(order.grandTotal != null || order.total != null) && (
             <div className="border-t border-stone-100 mt-2 pt-2 flex justify-between font-bold text-stone-900">
-              <span>Total</span><span>₹{order.total}</span>
+              <span>Total</span><span>₹{order.grandTotal ?? order.total}</span>
             </div>
           )}
         </div>
