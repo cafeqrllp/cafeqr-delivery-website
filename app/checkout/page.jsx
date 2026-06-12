@@ -39,6 +39,24 @@ function CheckoutPageInner() {
   const [longitude, setLongitude] = useState(76.213928);
   const [mapLoaded, setMapLoaded] = useState(false);
 
+  const haversineDistanceKm = (lat1, lon1, lat2, lon2) => {
+    const R = 6371; // km
+    const dLat = (lat2 - lat1) * Math.PI / 180;
+    const dLon = (lon2 - lon1) * Math.PI / 180;
+    const a = 
+      Math.sin(dLat/2) * Math.sin(dLat/2) +
+      Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * 
+      Math.sin(dLon/2) * Math.sin(dLon/2);
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+    return R * c;
+  };
+
+  const deliveryRadiusEnforced = restaurant?.deliveryRadiusKm != null && Number(restaurant.deliveryRadiusKm) > 0;
+  const hasBranchCoords = restaurant?.branchLatitude != null && restaurant?.branchLongitude != null;
+  const currentDistanceKm = hasBranchCoords
+    ? haversineDistanceKm(Number(restaurant.branchLatitude), Number(restaurant.branchLongitude), latitude, longitude)
+    : null;
+
   // Load Leaflet resources dynamically
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -110,6 +128,37 @@ function CheckoutPageInner() {
 
       markerInstance = L.marker([lat, lng], { draggable: true, icon: redIcon }).addTo(mapInstance);
 
+      if (restaurant?.branchLatitude != null && restaurant?.branchLongitude != null) {
+        const shopIcon = L.icon({
+          iconUrl: 'https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-2x-orange.png',
+          shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/0.7.7/images/marker-shadow.png',
+          iconSize: [25, 41],
+          iconAnchor: [12, 41],
+          popupAnchor: [1, -34],
+          shadowSize: [41, 41]
+        });
+        L.marker([restaurant.branchLatitude, restaurant.branchLongitude], { icon: shopIcon })
+          .addTo(mapInstance)
+          .bindPopup(`<b>${restaurant.name || 'Restaurant'}</b>`)
+          .openPopup();
+
+        if (restaurant.deliveryRadiusKm && Number(restaurant.deliveryRadiusKm) > 0) {
+          L.circle([restaurant.branchLatitude, restaurant.branchLongitude], {
+            color: '#f97316',
+            fillColor: '#fdba74',
+            fillOpacity: 0.15,
+            radius: Number(restaurant.deliveryRadiusKm) * 1000
+          }).addTo(mapInstance);
+        }
+
+        // Fit bounds to show both the customer location and the restaurant
+        const bounds = L.latLngBounds([
+          [lat, lng],
+          [restaurant.branchLatitude, restaurant.branchLongitude]
+        ]);
+        mapInstance.fitBounds(bounds, { padding: [50, 50] });
+      }
+
       const reverseGeocode = async (lt, lg) => {
         try {
           const res = await fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${lt}&lon=${lg}`);
@@ -157,7 +206,7 @@ function CheckoutPageInner() {
         mapInstance.remove();
       }
     };
-  }, [mapLoaded, step, orderType]);
+  }, [mapLoaded, step, orderType, restaurant]);
 
   // Step 3 — payment (COD only)
   const [payment, setPayment] = useState('COD');
@@ -252,6 +301,13 @@ function CheckoutPageInner() {
     if (!address.area.trim()) e.area = 'Area / locality is required';
     if (!address.city.trim()) e.city = 'City is required';
     if (!address.pincode.trim()) e.pincode = 'Pincode is required';
+
+    if (deliveryRadiusEnforced && currentDistanceKm != null) {
+      if (currentDistanceKm > Number(restaurant.deliveryRadiusKm)) {
+        e.distance = `Sorry, your location is ${currentDistanceKm.toFixed(1)} km away. We deliver within ${restaurant.deliveryRadiusKm} km only.`;
+      }
+    }
+
     setErrors(e);
     return Object.keys(e).length === 0;
   };
@@ -526,6 +582,42 @@ function CheckoutPageInner() {
                     <label className="text-xs font-semibold text-stone-500 uppercase tracking-wide">Pin Your Location on Map</label>
                     <div id="map-picker" className="h-60 w-full rounded-xl border border-stone-200 overflow-hidden z-0" />
                     <p className="text-[10px] text-stone-400">Drag the red marker or click on the map to pin your exact delivery location.</p>
+                    
+                    {/* Real-time distance and delivery zone status */}
+                    {hasBranchCoords && currentDistanceKm != null && (
+                      <div className={`mt-3 p-3.5 rounded-xl border flex flex-col gap-1.5 transition-all duration-300 ${
+                        deliveryRadiusEnforced
+                          ? currentDistanceKm > Number(restaurant.deliveryRadiusKm)
+                            ? 'bg-red-50 border-red-200 text-red-700'
+                            : 'bg-green-50 border-green-200 text-green-700'
+                          : 'bg-stone-50 border-stone-200 text-stone-700'
+                      }`}>
+                        <div className="flex items-center justify-between text-xs font-semibold">
+                          <span className="flex items-center gap-1.5">
+                            {deliveryRadiusEnforced
+                              ? currentDistanceKm > Number(restaurant.deliveryRadiusKm)
+                                ? '⚠️ Out of Delivery Zone'
+                                : '✅ Within Delivery Zone'
+                              : '📍 Distance to Restaurant'
+                            }
+                          </span>
+                          <span>{currentDistanceKm.toFixed(2)} km away</span>
+                        </div>
+                        <p className="text-[11px] opacity-90 leading-normal">
+                          {deliveryRadiusEnforced
+                            ? currentDistanceKm > Number(restaurant.deliveryRadiusKm)
+                              ? `This branch only delivers within a ${restaurant.deliveryRadiusKm} km radius. You are currently ${(currentDistanceKm - restaurant.deliveryRadiusKm).toFixed(2)} km outside our zone.`
+                              : `You are well within our ${restaurant.deliveryRadiusKm} km delivery radius. We will deliver straight to your door!`
+                            : `Delivery radius is unrestricted for this branch. Your distance from the restaurant is ${currentDistanceKm.toFixed(2)} km.`
+                          }
+                        </p>
+                      </div>
+                    )}
+                    {errors.distance && (
+                      <div className="bg-red-100 text-red-800 p-3 rounded-xl text-xs font-medium border border-red-200 animate-pulse mt-2">
+                        {errors.distance}
+                      </div>
+                    )}
                   </div>
                 )}
               </div>
