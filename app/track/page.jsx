@@ -5,17 +5,17 @@ import { FiCheck, FiClock, FiPackage, FiTruck, FiHome } from 'react-icons/fi';
 import { getOrderStatus } from '@/lib/apiClient';
 
 const ORDER_STEPS = [
-  { key: 'PLACED',    label: 'Order Placed',     icon: FiCheck,   desc: 'Your order has been received' },
-  { key: 'CONFIRMED', label: 'Order Confirmed',  icon: FiPackage, desc: 'Restaurant is preparing your food' },
-  { key: 'READY',     label: 'Food Ready',       icon: FiClock,   desc: 'Your order is ready' },
-  { key: 'OUT',       label: 'Out for Delivery', icon: FiTruck,   desc: 'On the way to you' },
-  { key: 'DELIVERED', label: 'Delivered',        icon: FiHome,    desc: 'Enjoy your meal!' },
+  { key: 'PLACED', label: 'Order Placed', icon: FiCheck, desc: 'Your order has been received' },
+  { key: 'CONFIRMED', label: 'Order Confirmed', icon: FiPackage, desc: 'Restaurant is preparing your food' },
+  { key: 'READY', label: 'Food Ready', icon: FiClock, desc: 'Your order is ready' },
+  { key: 'OUT', label: 'Out for Delivery', icon: FiTruck, desc: 'On the way to you' },
+  { key: 'DELIVERED', label: 'Delivered', icon: FiHome, desc: 'Enjoy your meal!' },
 ];
 
 const TAKEAWAY_STEPS = [
-  { key: 'PLACED',    label: 'Order Placed',    icon: FiCheck,   desc: 'Your order has been received' },
-  { key: 'CONFIRMED', label: 'Confirmed',       icon: FiPackage, desc: 'Restaurant is preparing your order' },
-  { key: 'READY',     label: 'Ready for Pickup', icon: FiClock,  desc: 'Your order is ready! Head over to pick up.' },
+  { key: 'PLACED', label: 'Order Placed', icon: FiCheck, desc: 'Your order has been received' },
+  { key: 'CONFIRMED', label: 'Confirmed', icon: FiPackage, desc: 'Restaurant is preparing your order' },
+  { key: 'READY', label: 'Ready for Pickup', icon: FiClock, desc: 'Your order is ready! Head over to pick up.' },
 ];
 
 const getStepperStatusIndex = (backendStatus) => {
@@ -44,15 +44,15 @@ const getStepperStatusIndex = (backendStatus) => {
 
 function TrackPageInner() {
   const searchParams = useSearchParams();
-  const router       = useRouter();
-  const orderId      = searchParams.get('id');
+  const router = useRouter();
+  const orderId = searchParams.get('id');
   const restaurantId = searchParams.get('r');
-  const orgId        = searchParams.get('orgId') || searchParams.get('branchId') || '';
+  const orgId = searchParams.get('orgId') || searchParams.get('branchId') || '';
 
-  const [order, setOrder]       = useState(null);
-  const [status, setStatus]     = useState('PLACED');
-  const [loading, setLoading]   = useState(true);
-  const [eta, setEta]           = useState('25-35 min');
+  const [order, setOrder] = useState(null);
+  const [status, setStatus] = useState('PLACED');
+  const [loading, setLoading] = useState(true);
+  const [eta, setEta] = useState('25-35 min');
   const [mapLoaded, setMapLoaded] = useState(false);
 
   // Load Leaflet resources dynamically
@@ -140,8 +140,8 @@ function TrackPageInner() {
     const container = document.getElementById('tracking-map');
     if (!container || container._leaflet_id) return;
 
-    const restLat = 10.528392;
-    const restLng = 76.213928;
+    const restLat = order.shopLatitude ? Number(order.shopLatitude) : 10.528392;
+    const restLng = order.shopLongitude ? Number(order.shopLongitude) : 76.213928;
     const custLat = order.latitude ? Number(order.latitude) : 10.532000;
     const custLng = order.longitude ? Number(order.longitude) : 76.222000;
 
@@ -188,8 +188,8 @@ function TrackPageInner() {
   }, [mapLoaded, order]);
 
   const orderType = order?.type || order?.orderType || 'DELIVERY';
-  const steps     = orderType === 'TAKEAWAY' ? TAKEAWAY_STEPS : ORDER_STEPS;
-  const stepIdx   = getStepperStatusIndex(status);
+  const steps = orderType === 'TAKEAWAY' ? TAKEAWAY_STEPS : ORDER_STEPS;
+  const stepIdx = getStepperStatusIndex(status);
   const isDelivered = status === 'DELIVERED' || status === 'COMPLETED' || (orderType === 'TAKEAWAY' && status === 'READY');
   const isCancelled = status === 'CANCELLED' || status === 'VOID';
 
@@ -250,31 +250,28 @@ function TrackPageInner() {
           <h2 className="text-sm font-semibold text-stone-600 mb-4">Order Status</h2>
           <div className="space-y-0">
             {steps.map((step, idx) => {
-              const done    = idx < stepIdx;
+              const done = idx < stepIdx;
               const current = idx === stepIdx;
-              const Icon    = step.icon;
+              const Icon = step.icon;
               return (
                 <div key={step.key} className="flex gap-4">
                   {/* Line + circle */}
                   <div className="flex flex-col items-center">
-                    <div className={`w-9 h-9 rounded-full flex items-center justify-center flex-shrink-0 border-2 transition-all ${
-                      done    ? 'bg-green-500 border-green-500 text-white' :
-                      current ? 'bg-brand-orange border-brand-orange text-white' :
-                                'bg-white border-stone-200 text-stone-300'
-                    }`}>
+                    <div className={`w-9 h-9 rounded-full flex items-center justify-center flex-shrink-0 border-2 transition-all ${done ? 'bg-green-500 border-green-500 text-white' :
+                        current ? 'bg-brand-orange border-brand-orange text-white' :
+                          'bg-white border-stone-200 text-stone-300'
+                      }`}>
                       <Icon size={16} />
                     </div>
                     {idx < steps.length - 1 && (
-                      <div className={`w-0.5 flex-1 min-h-[24px] ${
-                        done ? 'bg-green-400' : 'bg-stone-200'
-                      }`} />
+                      <div className={`w-0.5 flex-1 min-h-[24px] ${done ? 'bg-green-400' : 'bg-stone-200'
+                        }`} />
                     )}
                   </div>
                   {/* Label */}
-                  <div className={`pb-5 ${ idx === steps.length - 1 ? 'pb-0' : '' }`}>
-                    <p className={`text-sm font-semibold ${
-                      current ? 'text-brand-orange' : done ? 'text-green-600' : 'text-stone-300'
-                    }`}>{step.label}</p>
+                  <div className={`pb-5 ${idx === steps.length - 1 ? 'pb-0' : ''}`}>
+                    <p className={`text-sm font-semibold ${current ? 'text-brand-orange' : done ? 'text-green-600' : 'text-stone-300'
+                      }`}>{step.label}</p>
                     {current && (
                       <p className="text-xs text-stone-400 mt-0.5 flex items-center gap-1">
                         <span className="inline-block w-1.5 h-1.5 bg-brand-orange rounded-full animate-pulse" />
