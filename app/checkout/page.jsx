@@ -34,7 +34,7 @@ function CheckoutPageInner() {
   const [sessionLoading, setSessionLoading] = useState(true);
 
   // Step 2 — address
-  const [address, setAddress] = useState({ line1: '', area: '', city: 'Thrissur', pincode: '' });
+  const [address, setAddress] = useState({ line1: '', area: '', city: '', pincode: '' });
   const [latitude, setLatitude] = useState(10.528392);
   const [longitude, setLongitude] = useState(76.213928);
   const [mapLoaded, setMapLoaded] = useState(false);
@@ -119,12 +119,14 @@ function CheckoutPageInner() {
             const road = addr.road || '';
             const sub = addr.suburb || addr.neighbourhood || '';
             const area = addr.suburb || addr.village || addr.town || addr.county || '';
+            const city = addr.city || addr.town || addr.village || addr.municipality || addr.city_district || addr.county || '';
             const pincode = addr.postcode || '';
 
             setAddress(prev => ({
               ...prev,
               area: road ? `${road}, ${area}` : (sub ? `${sub}, ${area}` : area),
-              pincode: pincode.substring(0, 6)
+              city: city || prev.city || 'Thrissur',
+              pincode: pincode ? pincode.substring(0, 6) : prev.pincode
             }));
           }
         } catch (err) {
@@ -248,6 +250,7 @@ function CheckoutPageInner() {
     const e = {};
     if (!address.line1.trim()) e.line1 = 'House / flat is required';
     if (!address.area.trim()) e.area = 'Area / locality is required';
+    if (!address.city.trim()) e.city = 'City is required';
     if (!address.pincode.trim()) e.pincode = 'Pincode is required';
     setErrors(e);
     return Object.keys(e).length === 0;
@@ -489,13 +492,25 @@ function CheckoutPageInner() {
                 <div className="flex gap-3">
                   <div className="flex-1">
                     <label className="text-xs font-medium text-stone-500 uppercase tracking-wide">City</label>
-                    <input className="w-full mt-1.5 border border-stone-200 rounded-xl px-4 py-3 text-sm bg-stone-50 text-stone-400" value={address.city} readOnly />
+                    <input
+                      className={`w-full mt-1.5 border rounded-xl px-4 py-3 text-sm outline-none transition-colors ${
+                        errors.city ? 'border-red-400 bg-red-50' : 'border-stone-200 focus:border-brand-orange'
+                      }`}
+                      placeholder="Thrissur"
+                      value={address.city}
+                      onChange={e => {
+                        setAddress(p => ({ ...p, city: e.target.value }));
+                        setErrors(p => ({ ...p, city: '' }));
+                      }}
+                    />
+                    {errors.city && <p className="text-xs text-red-500 mt-1">{errors.city}</p>}
                   </div>
                   <div className="flex-1">
                     <label className="text-xs font-medium text-stone-500 uppercase tracking-wide">Pincode</label>
                     <input
-                      className={`w-full mt-1.5 border rounded-xl px-4 py-3 text-sm outline-none transition-colors ${errors.pincode ? 'border-red-400 bg-red-50' : 'border-stone-200 focus:border-brand-orange'
-                        }`}
+                      className={`w-full mt-1.5 border rounded-xl px-4 py-3 text-sm outline-none transition-colors ${
+                        errors.pincode ? 'border-red-400 bg-red-50' : 'border-stone-200 focus:border-brand-orange'
+                      }`}
                       placeholder="680001"
                       value={address.pincode}
                       onChange={e => { setAddress(p => ({ ...p, pincode: e.target.value })); setErrors(p => ({ ...p, pincode: '' })); }}
