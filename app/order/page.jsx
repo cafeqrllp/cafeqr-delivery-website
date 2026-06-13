@@ -103,6 +103,9 @@ function OrderPageInner() {
           pricesIncludeTax: rData.pricesIncludeTax || false,
           taxSplitEnabled: rData.taxSplitEnabled || true,
           currencyDecimalPlaces: rData.currencyDecimalPlaces ?? 2,
+          deliveryRadiusKm: rData.deliveryRadiusKm || null,
+          branchLatitude: rData.branchLatitude || null,
+          branchLongitude: rData.branchLongitude || null,
         };
 
         const items  = Array.isArray(mData) ? mData : (mData.items || mData.products || []);
