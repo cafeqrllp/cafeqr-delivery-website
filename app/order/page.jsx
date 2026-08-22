@@ -5,7 +5,8 @@ import { FiSearch, FiArrowLeft, FiStar, FiClock, FiMapPin, FiShoppingBag } from 
 import MenuItemCard from '@/components/MenuItemCard';
 import CartDrawer from '@/components/CartDrawer';
 import FloatingCartBar from '@/components/FloatingCartBar';
-import { fetchDeliverySettings, fetchMenu } from '@/lib/apiClient';
+import VariantSelectorModal from '@/components/VariantSelectorModal';
+import { fetchDeliverySettings, fetchMenu, resolveSlug } from '@/lib/apiClient';
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || 'https://cafe-qr-backend.onrender.com/api';
 
@@ -34,12 +35,99 @@ const MOCK_MENU = [
 ];
 // ─────────────────────────────────────────────────────────────────────────────
 
-function OrderPageInner() {
+/**
+ * Helper to get display metadata and feature toggles based on branch posType
+ */
+function getBusinessCategoryInfo(posType = 'Restaurant') {
+  const norm = String(posType || '').toUpperCase();
+  
+  const isBoutique = norm.includes('BOUTIQUE') || norm.includes('FASHION') || norm.includes('APPAREL') || norm.includes('CLOTH');
+  const isGrocery = norm.includes('GROCERY') || norm.includes('SUPERMARKET') || norm.includes('MART');
+  const isBakery = norm.includes('BAKERY') || norm.includes('BAKE') || norm.includes('PASTRY') || norm.includes('CAKE');
+  const isSalon = norm.includes('SALON') || norm.includes('SPA') || norm.includes('BEAUTY');
+  const isRetail = norm.includes('OTHER') || norm.includes('RETAIL') || norm.includes('STORE');
+  const isFood = !isBoutique && !isGrocery && !isSalon && !isRetail;
+
+  if (isBoutique) {
+    return {
+      isFood: false,
+      heroEmoji: '👗',
+      placeholderEmoji: '👗',
+      searchPlaceholder: 'Search boutique items…',
+      categoryLabel: 'Boutique & Fashion',
+      showVegFilter: false,
+      showVegBadge: false,
+    };
+  } else if (isGrocery) {
+    return {
+      isFood: false,
+      heroEmoji: '🛒',
+      placeholderEmoji: '📦',
+      searchPlaceholder: 'Search groceries & items…',
+      categoryLabel: 'Grocery & Mart',
+      showVegFilter: false,
+      showVegBadge: false,
+    };
+  } else if (isBakery) {
+    return {
+      isFood: true,
+      heroEmoji: '🥐',
+      placeholderEmoji: '🧁',
+      searchPlaceholder: 'Search bakes & treats…',
+      categoryLabel: 'Bakery & Pastry',
+      showVegFilter: true,
+      showVegBadge: true,
+    };
+  } else if (isSalon) {
+    return {
+      isFood: false,
+      heroEmoji: '💇',
+      placeholderEmoji: '🧴',
+      searchPlaceholder: 'Search services & products…',
+      categoryLabel: 'Salon & Spa',
+      showVegFilter: false,
+      showVegBadge: false,
+    };
+  } else if (isRetail) {
+    return {
+      isFood: false,
+      heroEmoji: '🛍️',
+      placeholderEmoji: '📦',
+      searchPlaceholder: 'Search products…',
+      categoryLabel: 'Retail & General Store',
+      showVegFilter: false,
+      showVegBadge: false,
+    };
+  } else {
+    // Restaurant / Cafe / QSR
+    return {
+      isFood: true,
+      heroEmoji: '🍽️',
+      placeholderEmoji: '🥘',
+      searchPlaceholder: 'Search menu…',
+      categoryLabel: posType || 'Restaurant',
+      showVegFilter: true,
+      showVegBadge: true,
+    };
+  }
+}
+
+function OrderPageInner({ slugHandle, branchHandle }) {
   const searchParams = useSearchParams();
   const router = useRouter();
-  const restaurantId = searchParams.get('r');
+  const queryRestaurantId = searchParams.get('r');
   const orderType = searchParams.get('t') || 'DELIVERY';
-  const orgId = searchParams.get('orgId') || searchParams.get('branchId') || '';
+  const queryOrgId = searchParams.get('orgId') || searchParams.get('branchId') || '';
+
+  const targetHandle = slugHandle || queryRestaurantId;
+  const targetBranch = branchHandle || queryOrgId;
+
+  const [resolvedIds, setResolvedIds] = useState({
+    clientId: queryRestaurantId || null,
+    orgId: queryOrgId || '',
+    clientSlug: slugHandle || null,
+    branchSlug: branchHandle || null
+  });
 
   const [restaurant, setRestaurant] = useState(null);
   const [menu, setMenu] = useState([]);
@@ -47,14 +135,21 @@ function OrderPageInner() {
   const [activeCategory, setActiveCategory] = useState(null);
   const [cart, setCart] = useState([]);  // [{ id, name, price, qty }]
   const [cartOpen, setCartOpen] = useState(false);
+  const [selectedVariantItem, setSelectedVariantItem] = useState(null);
   const [search, setSearch] = useState('');
   const [vegOnly, setVegOnly] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const categoryRefs = useRef({});
 
+  const restaurantId = resolvedIds.clientId || targetHandle;
+  const orgId = resolvedIds.orgId || targetBranch;
+
+  const categoryInfo = getBusinessCategoryInfo(restaurant?.posType);
+
   // ── Persist cart to sessionStorage so it survives page refresh ──
   useEffect(() => {
+    if (!restaurantId) return;
     try {
       const saved = sessionStorage.getItem(`cart_${restaurantId}`);
       if (saved) setCart(JSON.parse(saved));
@@ -62,12 +157,13 @@ function OrderPageInner() {
   }, [restaurantId]);
 
   useEffect(() => {
+    if (!restaurantId) return;
     try { sessionStorage.setItem(`cart_${restaurantId}`, JSON.stringify(cart)); } catch { }
   }, [cart, restaurantId]);
 
   // ── Fetch restaurant + menu ──────────────────────────────────────
   useEffect(() => {
-    if (!restaurantId) {
+    if (!targetHandle) {
       router.replace('/');
       return;
     }
@@ -76,10 +172,31 @@ function OrderPageInner() {
 
     const fetchData = async () => {
       try {
+        let activeClientId = targetHandle;
+        let activeOrgId = targetBranch;
+
+        // Resolve slug if handle is not a raw UUID or if custom slug route is used
+        try {
+          const res = await resolveSlug(targetHandle, targetBranch);
+          const rData = res.data?.data || res.data;
+          if (rData?.clientId) {
+            activeClientId = rData.clientId;
+            activeOrgId = rData.orgId || activeOrgId;
+            setResolvedIds({
+              clientId: rData.clientId,
+              orgId: rData.orgId || '',
+              clientSlug: rData.clientSlug,
+              branchSlug: rData.branchSlug
+            });
+          }
+        } catch (slugErr) {
+          console.warn('[CafeQR] Slug resolve skipped or failed, using direct ID', slugErr);
+        }
+
         // Try real backend settings and menu calls via apiClient
         const [rRes, mRes] = await Promise.all([
-          fetchDeliverySettings(restaurantId, orgId),
-          fetchMenu(restaurantId, orgId),
+          fetchDeliverySettings(activeClientId, activeOrgId),
+          fetchMenu(activeClientId, activeOrgId),
         ]);
 
         const rData = rRes.data?.data || rRes.data;
@@ -92,9 +209,11 @@ function OrderPageInner() {
           address: rData.address || '',
           brandColor: rData.brandColor || '#f97316',
           logoUrl: rData.logoUrl || '',
+          bannerUrl: rData.bannerUrl || null,
           rating: rData.rating || 4.5,
           delivery_time: rData.estimatedDeliveryMinutes ? `${rData.estimatedDeliveryMinutes} min` : '40 min',
           min_order: rData.minOrderAmount || 0,
+          posType: rData.posType || 'Restaurant',
           // Tax settings
           taxEnabled: rData.taxEnabled || false,
           taxLabelGlobal: rData.taxLabelGlobal || 'GST',
@@ -106,6 +225,9 @@ function OrderPageInner() {
           deliveryRadiusKm: rData.deliveryRadiusKm || null,
           branchLatitude: rData.branchLatitude || null,
           branchLongitude: rData.branchLongitude || null,
+          // Payment settings
+          onlinePaymentEnabled: !!rData.onlinePaymentEnabled,
+          razorpayKeyId: rData.razorpayKeyId || null,
         };
 
         const items = Array.isArray(mData) ? mData : (mData.items || mData.products || []);
@@ -138,11 +260,16 @@ function OrderPageInner() {
 
   // ── Cart helpers ─────────────────────────────────────────────────
   const addItem = (item) => setCart(prev => {
-    const existing = prev.find(i => i.id === item.id);
-    if (existing) return prev.map(i => i.id === item.id ? { ...i, qty: i.qty + 1 } : i);
+    const key = item.cartItemId || item.id;
+    const existing = prev.find(i => (i.cartItemId || i.id) === key);
+    if (existing) return prev.map(i => (i.cartItemId || i.id) === key ? { ...i, qty: i.qty + 1 } : i);
     return [...prev, {
-      id: item.id,
-      name: item.name,
+      id: key,
+      cartItemId: key,
+      productId: item.productId || item.id,
+      name: item.displayName || item.name,
+      variantName: item.variantName || null,
+      variantId: item.variantId || null,
       price: Number(item.price),
       qty: 1,
       taxRate: item.taxRate,
@@ -151,12 +278,39 @@ function OrderPageInner() {
   });
 
   const removeItem = (id) => setCart(prev => {
-    const existing = prev.find(i => i.id === id);
-    if (!existing || existing.qty === 1) return prev.filter(i => i.id !== id);
-    return prev.map(i => i.id === id ? { ...i, qty: i.qty - 1 } : i);
+    const existing = prev.find(i => i.id === id || i.cartItemId === id);
+    if (!existing || existing.qty === 1) return prev.filter(i => i.id !== id && i.cartItemId !== id);
+    return prev.map(i => (i.id === id || i.cartItemId === id) ? { ...i, qty: i.qty - 1 } : i);
   });
 
-  const getQty = (id) => cart.find(i => i.id === id)?.qty || 0;
+  const updateVariantQuantities = (item, quantitiesMap, variantOptions) => {
+    setCart(prev => {
+      const filtered = prev.filter(c => (c.productId || c.id) !== item.id);
+      const newEntries = [];
+      variantOptions.forEach(opt => {
+        const qty = Number(quantitiesMap[opt.id] || 0);
+        if (qty > 0) {
+          const key = `${item.id}_${opt.id}`;
+          newEntries.push({
+            id: key,
+            cartItemId: key,
+            productId: item.id,
+            name: `${item.name} (${opt.name})`,
+            displayName: `${item.name} (${opt.name})`,
+            variantName: opt.name,
+            variantId: opt.id,
+            price: Number(opt.price),
+            qty: qty,
+            taxRate: item.taxRate,
+            isPackagedGood: item.isPackagedGood
+          });
+        }
+      });
+      return [...filtered, ...newEntries];
+    });
+  };
+
+  const getQty = (id) => cart.filter(i => (i.productId || i.id) === id || (i.cartItemId || i.id) === id).reduce((sum, i) => sum + i.qty, 0);
 
   const scrollToCategory = (cat) => {
     setActiveCategory(cat);
@@ -169,7 +323,7 @@ function OrderPageInner() {
       (i.name || '').toLowerCase().includes(search.toLowerCase()) ||
       (i.description || '').toLowerCase().includes(search.toLowerCase());
     const isVeg = i.isVeg ?? i.is_veg ?? (i.productType === 'VEG' || i.productType === 'Vegetarian');
-    const matchVeg = !vegOnly || isVeg;
+    const matchVeg = !vegOnly || !categoryInfo.showVegFilter || isVeg;
     return matchSearch && matchVeg;
   });
 
@@ -208,7 +362,7 @@ function OrderPageInner() {
   if (error) return (
     <div className="min-h-screen flex flex-col items-center justify-center gap-4 px-6 text-center">
       <span className="text-5xl">😕</span>
-      <h2 className="font-bold text-stone-800 text-lg">Could not load menu</h2>
+      <h2 className="font-bold text-stone-800 text-lg">Could not load items</h2>
       <p className="text-stone-400 text-sm">{error}</p>
       <button onClick={() => window.location.reload()} className="bg-brand-orange text-white px-6 py-3 rounded-xl font-semibold text-sm">
         Try Again
@@ -219,21 +373,36 @@ function OrderPageInner() {
   return (
     <div className="min-h-screen bg-stone-50">
 
-      {/* Restaurant Hero */}
+      {/* Restaurant / Store Hero */}
       <div className="bg-white">
-        <div className="h-40 bg-gradient-to-br from-orange-400 to-red-500 relative overflow-hidden">
-          <div className="absolute inset-0 flex items-center justify-center opacity-20">
-            <span className="text-8xl">🍽️</span>
-          </div>
+        <div className="relative w-full h-44 sm:h-52 md:h-64 overflow-hidden bg-stone-900">
+          {restaurant?.bannerUrl ? (
+            <img
+              src={restaurant.bannerUrl}
+              alt={restaurant.name || 'Hero Banner'}
+              className="w-full h-full object-cover object-center transform transition-transform duration-700 hover:scale-105"
+              loading="eager"
+            />
+          ) : (
+            <div className="w-full h-full bg-gradient-to-br from-orange-400 to-red-500 relative flex items-center justify-center">
+              <div className="absolute inset-0 flex items-center justify-center opacity-20">
+                <span className="text-8xl">{categoryInfo.heroEmoji}</span>
+              </div>
+            </div>
+          )}
+
+          {/* Dark gradient overlay to guarantee text and button readability */}
+          <div className="absolute inset-0 bg-gradient-to-t from-black/60 via-black/20 to-transparent pointer-events-none" />
+
           {/* Back button */}
           <button
             onClick={() => router.back()}
-            className="absolute top-4 left-4 bg-white/20 backdrop-blur text-white p-2 rounded-full"
+            className="absolute top-4 left-4 bg-black/40 backdrop-blur-md text-white p-2.5 rounded-full hover:bg-black/60 transition-all z-10 shadow-sm"
           >
             <FiArrowLeft size={18} />
           </button>
-          <div className="absolute top-4 right-4">
-            <span className="bg-white/20 backdrop-blur text-white text-xs font-medium px-3 py-1.5 rounded-full">
+          <div className="absolute top-4 right-4 z-10">
+            <span className="bg-black/40 backdrop-blur-md text-white text-xs font-semibold px-3 py-1.5 rounded-full shadow-sm">
               {orderType === 'DELIVERY' ? '🚴 Delivery' : '🛖 Takeaway'}
             </span>
           </div>
@@ -241,7 +410,14 @@ function OrderPageInner() {
         <div className="px-4 py-4">
           <div className="flex items-start justify-between">
             <div>
-              <h1 className="text-xl font-bold text-stone-900">{restaurant?.name}</h1>
+              <div className="flex items-center gap-2 flex-wrap">
+                <h1 className="text-xl font-bold text-stone-900">{restaurant?.name}</h1>
+                {categoryInfo.categoryLabel && (
+                  <span className="bg-orange-50 text-brand-orange border border-orange-200 text-[10px] font-bold px-2 py-0.5 rounded-full uppercase tracking-wider">
+                    {categoryInfo.categoryLabel}
+                  </span>
+                )}
+              </div>
               <p className="text-stone-500 text-sm mt-0.5">{restaurant?.tagline || restaurant?.description}</p>
             </div>
           </div>
@@ -274,19 +450,21 @@ function OrderPageInner() {
             <FiSearch size={15} className="text-stone-400 flex-shrink-0" />
             <input
               type="text"
-              placeholder="Search menu…"
+              placeholder={categoryInfo.searchPlaceholder}
               value={search}
               onChange={e => setSearch(e.target.value)}
               className="bg-transparent flex-1 text-sm text-stone-700 outline-none placeholder-stone-400 min-w-0"
             />
           </div>
-          <button
-            onClick={() => setVegOnly(v => !v)}
-            className={`flex-shrink-0 text-xs font-semibold px-3 py-2.5 rounded-xl border-2 transition-colors ${vegOnly ? 'bg-green-500 text-white border-green-500' : 'border-stone-200 text-stone-500 bg-white'
-              }`}
-          >
-            🥦 Veg
-          </button>
+          {categoryInfo.showVegFilter && (
+            <button
+              onClick={() => setVegOnly(v => !v)}
+              className={`flex-shrink-0 text-xs font-semibold px-3 py-2.5 rounded-xl border-2 transition-colors ${vegOnly ? 'bg-green-500 text-white border-green-500' : 'border-stone-200 text-stone-500 bg-white'
+                }`}
+            >
+              🥦 Veg
+            </button>
+          )}
         </div>
 
         {/* Category pills (hidden during search) */}
@@ -311,13 +489,22 @@ function OrderPageInner() {
         )}
       </div>
 
-      {/* Menu */}
+      {/* Menu / Catalog Items */}
       <div className="pb-28">
         {search || vegOnly ? (
           <div className="bg-white mx-4 mt-3 rounded-xl px-4">
             <p className="text-xs text-stone-400 pt-3 pb-1">{filtered.length} items</p>
             {filtered.map(item => (
-              <MenuItemCard key={item.id} item={item} qty={getQty(item.id)} onAdd={addItem} onRemove={removeItem} />
+              <MenuItemCard
+                key={item.id}
+                item={item}
+                qty={getQty(item.id)}
+                onAdd={addItem}
+                onRemove={removeItem}
+                onSelectVariant={setSelectedVariantItem}
+                showVegBadge={categoryInfo.showVegBadge}
+                defaultEmoji={categoryInfo.placeholderEmoji}
+              />
             ))}
             {filtered.length === 0 && (
               <div className="py-12 text-center">
@@ -335,7 +522,16 @@ function OrderPageInner() {
                 </div>
                 <div className="bg-white mx-4 rounded-xl px-4">
                   {grouped[cat].map(item => (
-                    <MenuItemCard key={item.id} item={item} qty={getQty(item.id)} onAdd={addItem} onRemove={removeItem} />
+                    <MenuItemCard
+                      key={item.id}
+                      item={item}
+                      qty={getQty(item.id)}
+                      onAdd={addItem}
+                      onRemove={removeItem}
+                      onSelectVariant={setSelectedVariantItem}
+                      showVegBadge={categoryInfo.showVegBadge}
+                      defaultEmoji={categoryInfo.placeholderEmoji}
+                    />
                   ))}
                 </div>
               </div>
@@ -361,18 +557,27 @@ function OrderPageInner() {
           router.push(`/checkout?r=${restaurantId}&t=${orderType}${orgId ? `&orgId=${orgId}` : ''}`);
         }}
       />
+
+      {/* Variant Selector Modal */}
+      <VariantSelectorModal
+        item={selectedVariantItem}
+        isOpen={!!selectedVariantItem}
+        onClose={() => setSelectedVariantItem(null)}
+        cart={cart}
+        onUpdateVariants={updateVariantQuantities}
+      />
     </div>
   );
 }
 
-export default function OrderPage() {
+export default function OrderPage({ slugHandle, branchHandle }) {
   return (
     <Suspense fallback={
       <div className="min-h-screen flex items-center justify-center">
         <div className="w-10 h-10 border-4 border-brand-orange border-t-transparent rounded-full animate-spin" />
       </div>
     }>
-      <OrderPageInner />
+      <OrderPageInner slugHandle={slugHandle} branchHandle={branchHandle} />
     </Suspense>
   );
 }
