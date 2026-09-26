@@ -9,6 +9,8 @@
 // Response 200:  { verified: true, email, name, phone }  + Set-Cookie
 // Response 4xx:  { error: string }
 
+export const runtime = 'edge';
+
 import { NextResponse } from 'next/server';
 import { createHmac } from 'crypto';
 
